@@ -156,6 +156,260 @@ func ParseTarget(line string, opt ParseOptions) (Target, error) {
 	return Target{Raw: strings.TrimSpace(line), Host: host, Port: port, Kind: kind}, nil
 }
 
+// MaxExpand is the maximum number of hosts a single subnet or range
+// expression may expand to.
+const MaxExpand = 65536
+
+// ExpandTarget parses one input line into one or more targets. In addition to
+// the single-host syntax understood by ParseTarget it understands network
+// sweeps:
+//
+//	192.168.1.0/24                IPv4 网段（自动跳过网络号与广播地址）
+//	192.168.1.0/24:22             网段 + TCPing 端口
+//	tcp://192.168.1.0/24:22       强制 TCP 的网段扫描
+//	192.168.1.1-254              最后一个字节的范围
+//	192.168.1.1-192.168.1.254    完整地址范围
+//	2001:db8::/120               IPv6 网段
+//
+// Any other line is delegated to ParseTarget.
+func ExpandTarget(line string, opt ParseOptions) ([]Target, error) {
+	s := strings.TrimSpace(line)
+	if i := strings.IndexByte(s, '#'); i >= 0 {
+		s = strings.TrimSpace(s[:i])
+	}
+	if s == "" {
+		return nil, errors.New("空的目标")
+	}
+
+	proto := opt.Protocol
+	switch {
+	case strings.HasPrefix(s, "tcp://"):
+		proto, s = ProtocolTCP, s[len("tcp://"):]
+	case strings.HasPrefix(s, "icmp://"):
+		proto, s = ProtocolICMP, s[len("icmp://"):]
+	case strings.HasPrefix(s, "ping://"):
+		proto, s = ProtocolICMP, s[len("ping://"):]
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, errors.New("缺少主机名")
+	}
+
+	expr, port, hasPort := splitPortSuffix(s)
+
+	if _, ipnet, err := net.ParseCIDR(expr); err == nil {
+		return expandCIDR(expr, ipnet, port, hasPort, proto, opt)
+	}
+	if lo, hi, ok := parseIPv4Range(expr); ok {
+		return expandIPv4Range(expr, lo, hi, port, hasPort, proto, opt)
+	}
+
+	// Single host: defer to ParseTarget so all of its syntax keeps working.
+	t, err := ParseTarget(line, opt)
+	if err != nil {
+		return nil, err
+	}
+	return []Target{t}, nil
+}
+
+// splitPortSuffix splits a trailing ":port" from an address expression. It is
+// only meaningful when the remaining expression parses as a subnet or range;
+// otherwise the caller falls back to ParseTarget on the original line.
+func splitPortSuffix(s string) (expr string, port int, ok bool) {
+	if strings.HasPrefix(s, "[") {
+		return s, 0, false // [ipv6]:port is handled by ParseTarget
+	}
+	i := strings.LastIndexByte(s, ':')
+	if i < 0 || i == len(s)-1 {
+		return s, 0, false
+	}
+	n, err := strconv.Atoi(s[i+1:])
+	if err != nil {
+		return s, 0, false
+	}
+	return s[:i], n, true
+}
+
+// decideKind resolves the protocol mode and requested port into a concrete
+// probe kind and the effective port.
+func decideKind(proto ProtocolMode, port int, hasPort bool, opt ParseOptions) (Kind, int, error) {
+	if !hasPort {
+		port = 0
+	}
+	switch proto {
+	case ProtocolICMP:
+		return KindICMP, 0, nil
+	case ProtocolTCP:
+		if port == 0 {
+			port = opt.DefaultPort
+		}
+		if port <= 0 || port > 65535 {
+			return "", 0, errors.New("TCP 模式需要有效端口 (1-65535)")
+		}
+		return KindTCP, port, nil
+	default: // ProtocolAuto
+		if port > 0 {
+			if port > 65535 {
+				return "", 0, fmt.Errorf("端口超出范围: %d", port)
+			}
+			return KindTCP, port, nil
+		}
+		return KindICMP, 0, nil
+	}
+}
+
+func ip4ToU32(ip net.IP) uint32 {
+	ip = ip.To4()
+	return uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+}
+
+func u32ToIP4(v uint32) net.IP {
+	return net.IPv4(byte(v>>24), byte(v>>16), byte(v>>8), byte(v)).To4()
+}
+
+// parseIPv4Range recognises "a.b.c.d-a.b.c.e", "a.b.c.d-e" and "a.b.c.d-n".
+func parseIPv4Range(s string) (lo, hi uint32, ok bool) {
+	i := strings.IndexByte(s, '-')
+	if i <= 0 || i == len(s)-1 {
+		return 0, 0, false
+	}
+	left := strings.TrimSpace(s[:i])
+	right := strings.TrimSpace(s[i+1:])
+	a := net.ParseIP(left)
+	if a == nil || a.To4() == nil {
+		return 0, 0, false
+	}
+	lo = ip4ToU32(a)
+	if b := net.ParseIP(right); b != nil && b.To4() != nil {
+		hi = ip4ToU32(b)
+	} else {
+		n, err := strconv.Atoi(right)
+		if err != nil || n < 0 || n > 255 {
+			return 0, 0, false
+		}
+		hi = lo&0xffffff00 | uint32(n)
+	}
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	return lo, hi, true
+}
+
+func expandIPv4Range(expr string, lo, hi uint32, port int, hasPort bool, proto ProtocolMode, opt ParseOptions) ([]Target, error) {
+	kind, eport, err := decideKind(proto, port, hasPort, opt)
+	if err != nil {
+		return nil, err
+	}
+	n := int(hi-lo) + 1
+	if n > MaxExpand {
+		return nil, fmt.Errorf("范围过大：%s 会展开为 %d 个地址（上限 %d）", expr, n, MaxExpand)
+	}
+	out := make([]Target, 0, n)
+	for v := lo; ; v++ {
+		out = append(out, Target{Host: u32ToIP4(v).String(), Port: eport, Kind: kind})
+		if v == hi {
+			break
+		}
+	}
+	return out, nil
+}
+
+func expandCIDR(expr string, ipnet *net.IPNet, port int, hasPort bool, proto ProtocolMode, opt ParseOptions) ([]Target, error) {
+	kind, eport, err := decideKind(proto, port, hasPort, opt)
+	if err != nil {
+		return nil, err
+	}
+	ones, bits := ipnet.Mask.Size()
+	if bits == 0 {
+		return nil, fmt.Errorf("无效的网段: %s", expr)
+	}
+	hostBits := uint(bits - ones)
+
+	var total uint64
+	if hostBits >= 64 {
+		total = ^uint64(0)
+	} else {
+		total = uint64(1) << hostBits
+	}
+
+	usable := total
+	skipEdges := bits == 32 && hostBits >= 2 // IPv4 网络号与广播地址不探测
+	if skipEdges {
+		usable -= 2
+	}
+	if usable > MaxExpand {
+		return nil, fmt.Errorf("网段过大：%s 会展开为 %d 个地址（上限 %d），请缩小范围", expr, usable, MaxExpand)
+	}
+
+	out := make([]Target, 0, usable)
+	if bits == 32 {
+		v := ip4ToU32(ipnet.IP)
+		if skipEdges {
+			v++
+		}
+		for i := uint64(0); i < usable; i++ {
+			out = append(out, Target{Host: u32ToIP4(v).String(), Port: eport, Kind: kind})
+			v++
+		}
+		return out, nil
+	}
+
+	ip := make(net.IP, net.IPv6len)
+	copy(ip, ipnet.IP.To16())
+	for i := uint64(0); i < usable; i++ {
+		out = append(out, Target{Host: ip.String(), Port: eport, Kind: kind})
+		incIP(ip)
+	}
+	return out, nil
+}
+
+// incIP increments a 16 byte IP address in big-endian order.
+func incIP(ip net.IP) {
+	for i := len(ip) - 1; i >= 0; i-- {
+		ip[i]++
+		if ip[i] != 0 {
+			return
+		}
+	}
+}
+
+// LocalSubnets returns the IPv4 subnets of the up, non-loopback interfaces in
+// CIDR notation, for example "192.168.1.0/24".
+func LocalSubnets() []string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 || ifc.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			n, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip4 := n.IP.To4()
+			if ip4 == nil {
+				continue
+			}
+			cidr := (&net.IPNet{IP: ip4.Mask(n.Mask), Mask: n.Mask}).String()
+			if seen[cidr] {
+				continue
+			}
+			seen[cidr] = true
+			out = append(out, cidr)
+		}
+	}
+	return out
+}
+
 // Config holds one test run configuration.
 type Config struct {
 	Mode        Mode

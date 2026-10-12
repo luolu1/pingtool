@@ -18,7 +18,7 @@ import (
 const appTitle = "网络连通性批量测试工具  —  ICMP / TCPing"
 
 var defaultTargets = strings.Join([]string{
-	"# 每行一个目标，可删除或替换",
+	"# 每行一个目标：IP / 域名 / host:端口 / 网段(如 192.168.1.0/24) / 地址范围(如 192.168.1.1-254)",
 	"8.8.8.8",
 	"1.1.1.1",
 	"223.5.5.5",
@@ -109,11 +109,12 @@ func (a *App) build() error {
 								Text:     defaultTargets,
 								MinSize:  Size{Width: 340, Height: 110},
 							},
-							Label{Text: "格式：192.168.1.1 → ICMP；192.168.1.1:22 → TCPing（推荐，便于批量导入）   /   8.8.8.8 / example.com / [::1]:443 / tcp://host:port / icmp://host（# 后为注释）"},
+							Label{Text: "格式：192.168.1.1 → ICMP；192.168.1.1:22 → TCPing；192.168.1.0/24 或 192.168.1.1-254 → 网段扫描（可加 :端口）  /  example.com / [::1]:443 / tcp://host:port（# 后为注释）"},
 							Composite{
 								Layout: HBox{},
 								Children: []Widget{
 									PushButton{Text: "从文件载入…", OnClicked: a.onLoadFile},
+									PushButton{Text: "本机网段", OnClicked: a.onAddLocalSubnets},
 									PushButton{Text: "清空", OnClicked: a.onClearTargets},
 									PushButton{Text: "导出结果 CSV…", OnClicked: a.onExportCSV},
 									PushButton{Text: "导出详细日志…", OnClicked: a.onExportLog},
@@ -244,6 +245,22 @@ func (a *App) onRunModeChanged() {
 
 func (a *App) onClearTargets() {
 	a.targetsEdit.SetText("")
+}
+
+// onAddLocalSubnets appends the subnets of the local IPv4 interfaces so the
+// user can sweep the LAN without typing the CIDR by hand.
+func (a *App) onAddLocalSubnets() {
+	subs := pinger.LocalSubnets()
+	if len(subs) == 0 {
+		walk.MsgBox(a.mw, "未找到网段", "没有检测到可用的 IPv4 网络接口。", walk.MsgBoxIconWarning)
+		return
+	}
+	cur := strings.TrimRight(a.targetsEdit.Text(), "\r\n")
+	add := strings.Join(subs, "\r\n")
+	if cur != "" {
+		cur += "\r\n"
+	}
+	a.targetsEdit.SetText(cur + add)
 }
 
 func (a *App) onLoadFile() {
@@ -583,16 +600,18 @@ func parseTargets(text string, opt pinger.ParseOptions) ([]pinger.Target, []stri
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		t, err := pinger.ParseTarget(line, opt)
+		t, err := pinger.ExpandTarget(line, opt)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s：%v", line, err))
 			continue
 		}
-		if seen[t.String()] {
-			continue
+		for _, tg := range t {
+			if seen[tg.String()] {
+				continue
+			}
+			seen[tg.String()] = true
+			targets = append(targets, tg)
 		}
-		seen[t.String()] = true
-		targets = append(targets, t)
 	}
 	return targets, errs
 }

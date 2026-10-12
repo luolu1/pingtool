@@ -43,6 +43,74 @@ func TestParseTarget(t *testing.T) {
 	}
 }
 
+func TestExpandTarget(t *testing.T) {
+	cases := []struct {
+		line  string
+		opt   ParseOptions
+		hosts []string
+		port  int
+		kind  Kind
+	}{
+		// /30 keeps the two usable addresses, drops network + broadcast.
+		{"192.168.1.0/30", ParseOptions{Protocol: ProtocolAuto}, []string{"192.168.1.1", "192.168.1.2"}, 0, KindICMP},
+		// /31 is point-to-point, both addresses are usable.
+		{"192.168.1.0/31", ParseOptions{Protocol: ProtocolAuto}, []string{"192.168.1.0", "192.168.1.1"}, 0, KindICMP},
+		// /32 is a single host.
+		{"192.168.1.7/32", ParseOptions{Protocol: ProtocolAuto}, []string{"192.168.1.7"}, 0, KindICMP},
+		// Range shorthand and full range.
+		{"10.0.0.1-4", ParseOptions{Protocol: ProtocolAuto}, []string{"10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4"}, 0, KindICMP},
+		{"10.0.0.10-10.0.0.12", ParseOptions{Protocol: ProtocolAuto}, []string{"10.0.0.10", "10.0.0.11", "10.0.0.12"}, 0, KindICMP},
+		// Reverse order is normalised.
+		{"10.0.0.4-2", ParseOptions{Protocol: ProtocolAuto}, []string{"10.0.0.2", "10.0.0.3", "10.0.0.4"}, 0, KindICMP},
+		// Subnet + port becomes a TCP sweep.
+		{"192.168.1.0/30:22", ParseOptions{Protocol: ProtocolAuto}, []string{"192.168.1.1", "192.168.1.2"}, 22, KindTCP},
+		{"tcp://192.168.1.0/30:443", ParseOptions{Protocol: ProtocolAuto}, []string{"192.168.1.1", "192.168.1.2"}, 443, KindTCP},
+		// icmp:// forces ICMP even with a port suffix.
+		{"icmp://192.168.1.0/30:22", ParseOptions{Protocol: ProtocolTCP, DefaultPort: 22}, []string{"192.168.1.1", "192.168.1.2"}, 0, KindICMP},
+		// Range with a forced TCP default port.
+		{"10.0.0.1-2", ParseOptions{Protocol: ProtocolTCP, DefaultPort: 3389}, []string{"10.0.0.1", "10.0.0.2"}, 3389, KindTCP},
+		// IPv6 subnet (no network/broadcast trimming).
+		{"2001:db8::/126", ParseOptions{Protocol: ProtocolAuto}, []string{"2001:db8::", "2001:db8::1", "2001:db8::2", "2001:db8::3"}, 0, KindICMP},
+		// Plain hosts still fall through to ParseTarget.
+		{"8.8.8.8", ParseOptions{Protocol: ProtocolAuto}, []string{"8.8.8.8"}, 0, KindICMP},
+		{"example.com:80", ParseOptions{Protocol: ProtocolAuto}, []string{"example.com"}, 80, KindTCP},
+		{"my-host.example.com", ParseOptions{Protocol: ProtocolAuto}, []string{"my-host.example.com"}, 0, KindICMP},
+	}
+	for _, c := range cases {
+		got, err := ExpandTarget(c.line, c.opt)
+		if err != nil {
+			t.Fatalf("ExpandTarget(%q) error: %v", c.line, err)
+		}
+		if len(got) != len(c.hosts) {
+			t.Fatalf("ExpandTarget(%q) returned %d targets, want %d (%v)", c.line, len(got), len(c.hosts), got)
+		}
+		for i, want := range c.hosts {
+			if got[i].Host != want || got[i].Port != c.port || got[i].Kind != c.kind {
+				t.Errorf("ExpandTarget(%q)[%d] = %s/%d/%s, want %s/%d/%s",
+					c.line, i, got[i].Host, got[i].Port, got[i].Kind, want, c.port, c.kind)
+			}
+		}
+	}
+
+	// A whole class A is refused instead of allocating millions of targets.
+	if _, err := ExpandTarget("10.0.0.0/8", ParseOptions{Protocol: ProtocolAuto}); err == nil {
+		t.Errorf("ExpandTarget(10.0.0.0/8) expected error")
+	}
+	if _, err := ExpandTarget("2001:db8::/64", ParseOptions{Protocol: ProtocolAuto}); err == nil {
+		t.Errorf("ExpandTarget(2001:db8::/64) expected error")
+	}
+}
+
+func TestLocalSubnets(t *testing.T) {
+	// The result is environment dependent, just make sure it never panics
+	// and only yields parseable CIDRs.
+	for _, s := range LocalSubnets() {
+		if _, _, err := net.ParseCIDR(s); err != nil {
+			t.Errorf("LocalSubnets returned invalid CIDR %q: %v", s, err)
+		}
+	}
+}
+
 func TestEngineTCPSuccess(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
