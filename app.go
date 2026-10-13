@@ -233,17 +233,89 @@ func (a *App) build() error {
 		return err
 	}
 
-	// Default to the continuous test mode (持续测试).
-	a.runModeCombo.SetCurrentIndex(2)
-	a.onRunModeChanged()
+	// Restore the last used inputs (缓存); on the very first run this keeps the
+	// declarative defaults and selects 持续测试.
+	a.applySettings()
 
 	a.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
+		a.saveSettings()
 		a.closed.Store(true)
 		if a.engine != nil {
 			a.engine.Stop()
 		}
 	})
 	return nil
+}
+
+// ---------------------------------------------------------------- settings
+
+const (
+	// runModeEntries is the number of items in 测试方式 (按包数 / 按时长 / 持续测试).
+	runModeEntries = 3
+	// continuousIndex is the 持续测试 item, the default on a first run.
+	continuousIndex = 2
+)
+
+func clampIndex(v, n int) int {
+	if v < 0 {
+		return 0
+	}
+	if v >= n {
+		return n - 1
+	}
+	return v
+}
+
+// applySettings restores the last used address list and parameters (缓存).
+// When there is no settings file yet the declarative defaults are kept and the
+// run mode stays on 持续测试.
+func (a *App) applySettings() {
+	s, err := readSettings()
+	if err != nil || s == nil {
+		a.runModeCombo.SetCurrentIndex(continuousIndex)
+		a.onRunModeChanged()
+		return
+	}
+	if s.Targets != "" {
+		a.targetsEdit.SetText(s.Targets)
+	}
+	a.runModeCombo.SetCurrentIndex(clampIndex(s.RunMode, runModeEntries))
+	if s.Count > 0 {
+		a.countEdit.SetValue(float64(s.Count))
+	}
+	if s.Duration > 0 {
+		a.durEdit.SetValue(float64(s.Duration))
+	}
+	a.durUnitCombo.SetCurrentIndex(clampIndex(s.DurUnit, 3))
+	if s.IntervalMS > 0 {
+		a.intervalEdit.SetValue(float64(s.IntervalMS))
+	}
+	if s.TimeoutMS > 0 {
+		a.timeoutEdit.SetValue(float64(s.TimeoutMS))
+	}
+	if s.Concurrency > 0 {
+		a.concEdit.SetValue(float64(s.Concurrency))
+	}
+	if s.ThresholdMS >= 0 {
+		a.threshEdit.SetValue(float64(s.ThresholdMS))
+	}
+	a.onRunModeChanged()
+}
+
+// saveSettings persists the current inputs so the next launch restores them.
+// It is best effort: a failure to write the cache must never block the app.
+func (a *App) saveSettings() {
+	_ = writeSettings(&Settings{
+		Targets:     a.targetsEdit.Text(),
+		RunMode:     a.runModeCombo.CurrentIndex(),
+		Count:       int(a.countEdit.Value()),
+		Duration:    int(a.durEdit.Value()),
+		DurUnit:     a.durUnitCombo.CurrentIndex(),
+		IntervalMS:  int(a.intervalEdit.Value()),
+		TimeoutMS:   int(a.timeoutEdit.Value()),
+		Concurrency: int(a.concEdit.Value()),
+		ThresholdMS: int(a.threshEdit.Value()),
+	})
 }
 
 // ---------------------------------------------------------------- handlers
@@ -334,6 +406,8 @@ func (a *App) onExportCSV() {
 	if !ok {
 		return
 	}
+	// The walk save dialog does not append the filter extension, so do it here.
+	dlg.FilePath = ensureExt(dlg.FilePath, ".csv")
 	snap := a.engine.Snapshot()
 	var sb strings.Builder
 	sb.WriteString("目标,协议,已发,成功,失败,丢包率(%),最新(ms),最小(ms),平均(ms),最大(ms),状态\n")
@@ -374,6 +448,8 @@ func (a *App) onExportLog() {
 	if !ok {
 		return
 	}
+	// The walk save dialog does not append the filter extension, so do it here.
+	dlg.FilePath = ensureExt(dlg.FilePath, ".txt")
 
 	snap := a.engine.Snapshot()
 	cfg := a.engine.Config()
@@ -464,6 +540,7 @@ func (a *App) onStart() {
 
 	a.startBtn.SetEnabled(false)
 	a.stopBtn.SetEnabled(true)
+	a.saveSettings()
 
 	if len(errs) > 0 {
 		a.summary.SetText(fmt.Sprintf("已忽略 %d 行无效目标：%s", len(errs), strings.Join(errs, "；")))
