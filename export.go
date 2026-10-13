@@ -67,10 +67,14 @@ func probeErrText(p pinger.Probe) string {
 }
 
 func modeText(cfg pinger.Config) string {
-	if cfg.Mode == pinger.ModeDuration {
+	switch cfg.Mode {
+	case pinger.ModeDuration:
 		return fmt.Sprintf("按时长 %s", cfg.Duration)
+	case pinger.ModeContinuous:
+		return "持续测试（直到手动停止）"
+	default:
+		return fmt.Sprintf("按包数 %d", cfg.Count)
 	}
-	return fmt.Sprintf("按包数 %d", cfg.Count)
 }
 
 // localPrompt mimics a shell prompt such as user@host:~# .

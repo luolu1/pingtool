@@ -33,6 +33,7 @@ type App struct {
 	runModeCombo *walk.ComboBox
 	countEdit    *walk.NumberEdit
 	durEdit      *walk.NumberEdit
+	durUnitCombo *walk.ComboBox
 	intervalEdit *walk.NumberEdit
 	timeoutEdit  *walk.NumberEdit
 	concEdit     *walk.NumberEdit
@@ -128,12 +129,18 @@ func (a *App) build() error {
 						StretchFactor: 4,
 						Children: []Widget{
 							Label{Text: "测试方式"},
-							ComboBox{AssignTo: &a.runModeCombo, Model: []string{"按包数", "按时长"}, CurrentIndex: 0, OnCurrentIndexChanged: a.onRunModeChanged, MinSize: Size{Width: 190, Height: 0}},
+							ComboBox{AssignTo: &a.runModeCombo, Model: []string{"按包数", "按时长", "持续测试"}, CurrentIndex: 0, OnCurrentIndexChanged: a.onRunModeChanged, MinSize: Size{Width: 190, Height: 0}},
 							Label{Text: "包数"},
 							NumberEdit{AssignTo: &a.countEdit, MinValue: 1, MaxValue: 1000000, Value: 50.0, Decimals: 0, SpinButtonsVisible: true},
 
-							Label{Text: "时长（秒）"},
-							NumberEdit{AssignTo: &a.durEdit, MinValue: 1, MaxValue: 86400, Value: 60.0, Decimals: 0, SpinButtonsVisible: true, Enabled: false},
+							Label{Text: "时长"},
+							Composite{
+								Layout: HBox{MarginsZero: true},
+								Children: []Widget{
+									NumberEdit{AssignTo: &a.durEdit, MinValue: 1, MaxValue: 1000000, Value: 60.0, Decimals: 0, SpinButtonsVisible: true, Enabled: false, MinSize: Size{Width: 90, Height: 0}},
+									ComboBox{AssignTo: &a.durUnitCombo, Model: []string{"秒", "分", "时"}, CurrentIndex: 0, Enabled: false, MinSize: Size{Width: 68, Height: 0}},
+								},
+							},
 							Label{Text: "间隔（毫秒）"},
 							NumberEdit{AssignTo: &a.intervalEdit, MinValue: 50, MaxValue: 600000, Value: 1000.0, Decimals: 0, SpinButtonsVisible: true},
 
@@ -238,9 +245,32 @@ func (a *App) build() error {
 // ---------------------------------------------------------------- handlers
 
 func (a *App) onRunModeChanged() {
-	byCount := a.runModeCombo.CurrentIndex() == 0
-	a.countEdit.SetEnabled(byCount)
-	a.durEdit.SetEnabled(!byCount)
+	switch a.runModeCombo.CurrentIndex() {
+	case 1: // 按时长
+		a.countEdit.SetEnabled(false)
+		a.durEdit.SetEnabled(true)
+		a.durUnitCombo.SetEnabled(true)
+	case 2: // 持续测试
+		a.countEdit.SetEnabled(false)
+		a.durEdit.SetEnabled(false)
+		a.durUnitCombo.SetEnabled(false)
+	default: // 按包数
+		a.countEdit.SetEnabled(true)
+		a.durEdit.SetEnabled(false)
+		a.durUnitCombo.SetEnabled(false)
+	}
+}
+
+// durUnit returns the multiplier selected next to the duration field.
+func (a *App) durUnit() time.Duration {
+	switch a.durUnitCombo.CurrentIndex() {
+	case 1:
+		return time.Minute
+	case 2:
+		return time.Hour
+	default:
+		return time.Second
+	}
 }
 
 func (a *App) onClearTargets() {
@@ -400,18 +430,20 @@ func (a *App) onStart() {
 		return
 	}
 
-	byCount := a.runModeCombo.CurrentIndex() == 0
 	cfg := pinger.Config{
 		Interval:    time.Duration(a.intervalEdit.Value()) * time.Millisecond,
 		Timeout:     time.Duration(a.timeoutEdit.Value()) * time.Millisecond,
 		Concurrency: int(a.concEdit.Value()),
 	}
-	if byCount {
+	switch a.runModeCombo.CurrentIndex() {
+	case 0: // 按包数
 		cfg.Mode = pinger.ModeCount
 		cfg.Count = int(a.countEdit.Value())
-	} else {
+	case 1: // 按时长
 		cfg.Mode = pinger.ModeDuration
-		cfg.Duration = time.Duration(a.durEdit.Value() * float64(time.Second))
+		cfg.Duration = time.Duration(a.durEdit.Value() * float64(a.durUnit()))
+	default: // 持续测试：直到手动停止
+		cfg.Mode = pinger.ModeContinuous
 	}
 
 	a.threshold = time.Duration(a.threshEdit.Value()) * time.Millisecond
@@ -617,23 +649,27 @@ func parseTargets(text string, opt pinger.ParseOptions) ([]pinger.Target, []stri
 }
 
 func expectedCells(cfg pinger.Config) int {
-	if cfg.Mode == pinger.ModeCount {
+	switch cfg.Mode {
+	case pinger.ModeCount:
 		if cfg.Count < 1 {
 			return 1
 		}
 		return cfg.Count
+	case pinger.ModeDuration:
+		if cfg.Interval <= 0 {
+			return 1
+		}
+		n := int(cfg.Duration / cfg.Interval)
+		if cfg.Duration%cfg.Interval != 0 {
+			n++
+		}
+		if n < 1 {
+			n = 1
+		}
+		return n
+	default: // 持续测试：总格数未知，由实际探测数量决定
+		return 0
 	}
-	if cfg.Interval <= 0 {
-		return 1
-	}
-	n := int(cfg.Duration / cfg.Interval)
-	if cfg.Duration%cfg.Interval != 0 {
-		n++
-	}
-	if n < 1 {
-		n = 1
-	}
-	return n
 }
 
 func jitter(s pinger.TargetStatus) time.Duration {

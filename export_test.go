@@ -82,3 +82,19 @@ func TestWriteProbeLogTCP(t *testing.T) {
 		}
 	}
 }
+
+func TestModeText(t *testing.T) {
+	cases := []struct {
+		cfg  pinger.Config
+		want string
+	}{
+		{pinger.Config{Mode: pinger.ModeCount, Count: 5}, "按包数 5"},
+		{pinger.Config{Mode: pinger.ModeDuration, Duration: 10 * time.Minute}, "10m"},
+		{pinger.Config{Mode: pinger.ModeContinuous}, "持续"},
+	}
+	for _, c := range cases {
+		if got := modeText(c.cfg); !strings.Contains(got, c.want) {
+			t.Errorf("modeText(mode=%v) = %q, want contains %q", c.cfg.Mode, got, c.want)
+		}
+	}
+}

@@ -25,7 +25,14 @@ const (
 	ModeCount Mode = iota
 	// ModeDuration runs probes until the given duration elapsed.
 	ModeDuration
+	// ModeContinuous keeps probing until Stop is called.
+	ModeContinuous
 )
+
+// continuousRingSize is the probe history kept per target in ModeContinuous.
+// Because the run is unbounded the ring scrolls, retaining only the most
+// recent probes for the status grid, the latency chart and the log export.
+const continuousRingSize = 2048
 
 // Kind selects the probe protocol.
 type Kind string
@@ -515,8 +522,13 @@ func New(cfg Config, targets []Target) *Engine {
 
 func ringSize(cfg Config) int {
 	n := cfg.Count
-	if cfg.Mode == ModeDuration {
+	switch cfg.Mode {
+	case ModeDuration:
 		n = int(cfg.Duration/cfg.Interval) + 2
+	case ModeContinuous:
+		// Unbounded run: keep a rolling window of recent probes for the grid,
+		// the chart and the detailed log export.
+		n = continuousRingSize
 	}
 	if n < 16 {
 		n = 16

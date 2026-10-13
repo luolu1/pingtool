@@ -210,3 +210,48 @@ func TestEngineDurationMode(t *testing.T) {
 		t.Errorf("expected at least 4 probes in 300ms/50ms, got %d", snap[0].Sent)
 	}
 }
+
+func TestEngineContinuousMode(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Close()
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	tg := []Target{{Host: "127.0.0.1", Port: port, Kind: KindTCP}}
+	e := New(Config{Mode: ModeContinuous, Interval: 30 * time.Millisecond, Timeout: time.Second}, tg)
+	e.Start()
+
+	time.Sleep(200 * time.Millisecond)
+	if !e.Running() {
+		t.Fatalf("continuous run stopped on its own")
+	}
+	mid := e.Snapshot()[0]
+	if mid.Sent < 3 || mid.Done {
+		t.Fatalf("after 200ms sent=%d done=%v, want an ongoing run", mid.Sent, mid.Done)
+	}
+
+	e.Stop()
+	e.Wait()
+
+	end := e.Snapshot()[0]
+	if !end.Done {
+		t.Errorf("target not marked done after Stop")
+	}
+	if end.Sent < mid.Sent {
+		t.Errorf("sent went backwards: %d -> %d", mid.Sent, end.Sent)
+	}
+	if n := len(e.Probes(0)); n > continuousRingSize {
+		t.Errorf("ring grew beyond %d: %d", continuousRingSize, n)
+	}
+}
