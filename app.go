@@ -233,6 +233,10 @@ func (a *App) build() error {
 		return err
 	}
 
+	// Default to the continuous test mode (持续测试).
+	a.runModeCombo.SetCurrentIndex(2)
+	a.onRunModeChanged()
+
 	a.mw.Closing().Attach(func(canceled *bool, reason walk.CloseReason) {
 		a.closed.Store(true)
 		if a.engine != nil {

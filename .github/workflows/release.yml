@@ -24,7 +24,10 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # Go 1.20 is the last release that supports Windows 7 / 8 /
+          # Server 2008 R2 / 2012 / 2012 R2. Newer toolchains refuse to launch
+          # on those systems ("若要找到适用于你的电脑的版本，请咨询软件发布者").
+          go-version: "1.20.14"
           cache: true
 
       - name: Run tests
@@ -55,6 +58,7 @@ jobs:
 
           build amd64 PingTool-windows-amd64.exe
           build arm64 PingTool-windows-arm64.exe
+          build 386   PingTool-windows-386.exe
 
           ls -la dist
 
