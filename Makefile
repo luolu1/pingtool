@@ -24,20 +24,20 @@ RSRC := $(shell command -v rsrc 2>/dev/null)
 
 all: build
 
-## Cross compile the 64-bit x86 Windows GUI executable.
+## Cross compile the 64-bit x86 (Intel/AMD) Windows GUI executable.
 build: res-amd64
-	GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o PingTool-windows-amd64.exe $(PKG)
-	@echo "built PingTool-windows-amd64.exe"
+	GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o PingTool-windows-x64.exe $(PKG)
+	@echo "built PingTool-windows-x64.exe"
 
 ## Cross compile the 64-bit ARM Windows GUI executable.
 build-arm64: res-arm64
 	GOOS=windows GOARCH=arm64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o PingTool-windows-arm64.exe $(PKG)
 	@echo "built PingTool-windows-arm64.exe"
 
-## 32 bit build (works on 32/64 bit Windows).
+## 32 bit (x86) build; runs on both 32-bit and 64-bit Windows.
 build-386: res-386
-	GOOS=windows GOARCH=386 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o PingTool-windows-386.exe $(PKG)
-	@echo "built PingTool-windows-386.exe"
+	GOOS=windows GOARCH=386 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o PingTool-windows-x86.exe $(PKG)
+	@echo "built PingTool-windows-x86.exe"
 
 ## Regenerate app.ico from source (no external tools required).
 icon:
@@ -70,6 +70,6 @@ clean:
 ## Produce a release folder with all Windows builds.
 dist: build build-arm64 build-386
 	@mkdir -p dist
-	cp PingTool-windows-amd64.exe PingTool-windows-arm64.exe PingTool-windows-386.exe dist/
+	cp PingTool-windows-x64.exe PingTool-windows-x86.exe PingTool-windows-arm64.exe dist/
 	cp README.md dist/ 2>/dev/null || true
 	@echo "artifacts in dist/"

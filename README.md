@@ -22,16 +22,19 @@
 
 | 文件 | 适用平台 |
 | --- | --- |
-| `PingTool-windows-amd64.exe` | 64 位 Windows（Intel / AMD，首选） |
-| `PingTool-windows-386.exe` | 32 位 Windows，或旧版 64 位系统无法运行 amd64 时使用 |
-| `PingTool-windows-arm64.exe` | Windows on ARM（骁龙等 ARM64 设备） |
+| `PingTool-windows-x64.exe` | **64 位** Windows（Intel / AMD，首选） |
+| `PingTool-windows-x86.exe` | **32 位** Windows（也可运行在 64 位系统上） |
+| `PingTool-windows-arm64.exe` | Windows on ARM（骁龙等 ARM64 设备，64 位） |
 
 下载后直接双击运行，无需安装、无需管理员权限。
 
+> **怎么选**：右键「此电脑 → 属性」，看「系统类型」。
+> 写着「64 位操作系统」用 `x64`（或 `x86`，两者都能跑）；写着「32 位操作系统」只能用 `x86`。
+>
 > **旧版 Windows / Windows Server 兼容性**：程序使用 Go 1.20 构建，可运行于
 > **Windows 7 / 8 / 8.1、Windows Server 2008 R2 / 2012 / 2012 R2** 及以上版本。
-> 如果双击后提示「若要找到适用于你的电脑的版本，请咨询软件发布者」，请确认系统位数：
-> 64 位系统用 `amd64`，32 位系统用 `386`。
+> 如果双击后提示「若要找到适用于你的电脑的版本，请咨询软件发布者」，说明选错了位数：
+> 32 位系统请改用 `PingTool-windows-x86.exe`。
 
 ---
 
@@ -89,17 +92,17 @@ tcp://192.168.1.0/24:3389   # 强制 TCP 的网段扫描
 
 ### 环境要求
 
-- Go 1.27 或更高版本（`go.mod` 声明 `go 1.27.2`）。
+- Go 1.20 或更高版本（程序用 Go 1.20 构建，以兼容 Windows 7 / Server 2008 R2 等旧系统）。
 - 目标平台为 Windows（`github.com/lxn/walk` 仅支持 Windows）。
-- 支持 `amd64` 与 `arm64` 两种 Windows 架构（交叉编译即可，无需在 Windows 上构建）。
+- 支持 `amd64`（x64）、`386`（x86）与 `arm64` 三种 Windows 架构（交叉编译即可，无需在 Windows 上构建）。
 
 ### 直接构建
 
 ```powershell
-GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui -s -w" -o PingTool-windows-amd64.exe .
+GOOS=windows GOARCH=amd64 go build -ldflags "-H windowsgui -s -w" -o PingTool-windows-x64.exe .
 ```
 
-`-H windowsgui` 让生成的程序成为无控制台窗口的 GUI 程序；构建 ARM64 版本时把 `GOARCH` 改为 `arm64` 即可。
+`-H windowsgui` 让生成的程序成为无控制台窗口的 GUI 程序；构建 32 位版本把 `GOARCH` 改为 `386`，ARM64 版本改为 `arm64` 即可。
 
 ### 带图标与清单构建（推荐）
 
@@ -115,17 +118,17 @@ go run ./tools/genicon -o app.ico
 # 生成资源 .syso，之后 go build 会自动嵌入
 rsrc -manifest pingtool.manifest -ico app.ico -arch amd64 -o rsrc_windows_amd64.syso
 
-GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-H windowsgui -s -w" -o PingTool-windows-amd64.exe .
+GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-H windowsgui -s -w" -o PingTool-windows-x64.exe .
 ```
 
 ### 使用 Makefile
 
-在安装有 `make` 的环境（Git Bash / MSYS2 / WSL）中：
+在安装有 `make` 的环境（Git Bash / MSYS2 / WSL）中（Makefile 会自动使用 Go 1.20 工具链）：
 
 ```bash
-make build        # 生成 PingTool-windows-amd64.exe
+make build        # 生成 64 位 PingTool-windows-x64.exe
+make build-386    # 生成 32 位 PingTool-windows-x86.exe
 make build-arm64  # 生成 PingTool-windows-arm64.exe
-make build-386    # 生成 32 位版本 PingTool-windows-386.exe
 make icon         # 重新生成 app.ico
 make test         # 运行单元测试
 make vet          # go vet
@@ -134,7 +137,7 @@ make dist         # 生成 dist/ 发布目录
 
 ### 自动发布
 
-仓库内置 GitHub Actions 工作流 `.github/workflows/release.yml`：推送一个 `v*` 形式的标签（例如 `v1.0.0`）后，会自动构建 `amd64` 与 `arm64` 两个 Windows 版本并创建 / 更新对应的 GitHub Release。
+仓库内置 GitHub Actions 工作流 `.github/workflows/release.yml`：推送一个 `v*` 形式的标签（例如 `v1.0.0`）后，会自动构建 `x64`、`x86` 与 `arm64` 三个 Windows 版本并创建 / 更新对应的 GitHub Release。
 
 ```bash
 git tag v1.0.0
@@ -145,7 +148,7 @@ git push origin v1.0.0
 
 ## 运行
 
-双击 `PingTool-windows-amd64.exe`（ARM 设备用 `PingTool-windows-arm64.exe`）即可，无需管理员权限。
+双击 `PingTool-windows-x64.exe`（32 位系统用 `x86`，ARM 设备用 `arm64`）即可，无需管理员权限。
 
 1. 在「目标地址」中粘贴或从文件载入地址列表（每行一个）。
 2. 设置测试方式（按包数／按时长／持续测试）、时长单位（秒／分／时）、间隔、超时、并发数等参数。
@@ -176,7 +179,7 @@ pingtool/
 ├── main_stub.go               # 非 Windows 平台占位
 ├── pingtool.manifest          # 应用程序清单
 ├── app.ico                    # 图标（*.syso 由 make res-<arch> 生成）
-├── .github/workflows/release.yml  # 自动构建并发布 Windows amd64 / arm64
+├── .github/workflows/release.yml  # 自动构建并发布 Windows x64 / x86 / arm64
 ├── tools/genicon/             # 纯 Go 图标生成器
 └── internal/pinger/           # 探测引擎
     ├── pinger.go              # 配置、目标解析、并发引擎、TCP 探测
